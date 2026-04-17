@@ -1,0 +1,7 @@
+# STM32CubeIDE local build/workspace artifacts
+Debug/
+Release/
+.metadata/
+
+# OMX local state
+.omx/
