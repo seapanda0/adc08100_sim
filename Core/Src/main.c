@@ -29,7 +29,7 @@
 // A0-A7 - ADC_IN
 // C13 - RESET_N
 // C14 - MODE
-// B6 - 1khz PWM Clock (TIM4 CH1 PWM) ps: change to 6khz
+// B7 - 6khz PWM Clock (TIM4 CH1 PWM)
 
 // OTHER PINS
 // B1 - ANALOG IN
@@ -70,6 +70,36 @@ static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define N_TAPS  12
+#define Q_SCALE 128
+
+#define COEFF_0  0x01  /*    1 -> +0.007812  (float: +0.008260) */
+#define COEFF_1  0x02  /*    2 -> +0.015625  (float: +0.019310) */
+#define COEFF_2  0x07  /*    7 -> +0.054688  (float: +0.051067) */
+#define COEFF_3  0x0D  /*   13 -> +0.101562  (float: +0.098457) */
+#define COEFF_4  0x13  /*   19 -> +0.148438  (float: +0.146382) */
+#define COEFF_5  0x17  /*   23 -> +0.179688  (float: +0.176525) */
+#define COEFF_6  0x17  /*   23 -> +0.179688  (float: +0.176525) */
+#define COEFF_7  0x13  /*   19 -> +0.148438  (float: +0.146382) */
+#define COEFF_8  0x0D  /*   13 -> +0.101562  (float: +0.098457) */
+#define COEFF_9  0x07  /*    7 -> +0.054688  (float: +0.051067) */
+#define COEFF_10  0x02  /*    2 -> +0.015625  (float: +0.019310) */
+#define COEFF_11  0x01  /*    1 -> +0.007812  (float: +0.008260) */
+
+static const int8_t fir_coeffs[N_TAPS] = {
+    (int8_t)COEFF_0  /*    1 */,
+    (int8_t)COEFF_1  /*    2 */,
+    (int8_t)COEFF_2  /*    7 */,
+    (int8_t)COEFF_3  /*   13 */,
+    (int8_t)COEFF_4  /*   19 */,
+    (int8_t)COEFF_5  /*   23 */,
+    (int8_t)COEFF_6  /*   23 */,
+    (int8_t)COEFF_7  /*   19 */,
+    (int8_t)COEFF_8  /*   13 */,
+    (int8_t)COEFF_9  /*    7 */,
+    (int8_t)COEFF_10  /*    2 */,
+    (int8_t)COEFF_11  /*    1 */
+};
 
 void EXTI15_10_IRQHandler(void)
 {
@@ -120,9 +150,19 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
+
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN;
   RCC->APB2ENR |= RCC_APB2ENR_TIM1EN | RCC_APB2ENR_ADC1EN | RCC_APB2ENR_SYSCFGEN;
 
+  // --- PC13: RESET_N, PC14: MODE as output ---
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;  // enable GPIOC clock
+
+  GPIOC->MODER   &= ~((3 << (13 * 2)) | (3 << (14 * 2)));  // clear
+  GPIOC->MODER   |=  ((1 << (13 * 2)) | (1 << (14 * 2)));  // output
+  GPIOC->OTYPER  &= ~((1 << 13) | (1 << 14));               // push-pull
+  GPIOC->OSPEEDR &= ~((3 << (13 * 2)) | (3 << (14 * 2)));  // low speed
+  GPIOC->PUPDR   &= ~((3 << (13 * 2)) | (3 << (14 * 2)));  // no pull
+  
   // PA0-PA7 as general purpose output
   GPIOA->MODER   &= ~(0x0000FFFF);  // clear bits 0-15 (PA0-PA7)
   GPIOA->MODER   |=  (0x00005555);  // 01 for each = output mode
@@ -130,6 +170,49 @@ int main(void)
   GPIOA->OSPEEDR &= ~(0x0000FFFF);  // clear
   GPIOA->OSPEEDR |=  (0x00005555);  // medium speed
   GPIOA->PUPDR   &= ~(0x0000FFFF);  // no pull
+
+  // --- PB7: GPIO output (before PWM clock use) ---
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+
+  GPIOB->MODER   &= ~(3 << (7 * 2));  // clear
+  GPIOB->MODER   |=  (1 << (7 * 2));  // output
+  GPIOB->OTYPER  &= ~(1 << 7);        // push-pull
+  GPIOB->OSPEEDR &= ~(3 << (7 * 2));  // low speed
+  GPIOB->PUPDR   &= ~(3 << (7 * 2));  // no pull
+
+  // Toggle PB7 manually
+  GPIOB->BSRR = (1 << (7 + 16));  // set low
+
+
+  // COEFFICIENT LOADING START
+
+  // Set to coefficient loading mode
+  GPIOC->BSRR = (1 << 14);         // set mode pin to 1
+  GPIOB->BSRR = (1 << (7 + 16));  // set clock low
+  HAL_Delay(5);
+
+  // Reset the fpga
+  GPIOC->BSRR = (1 << (13 + 16));  // set reset pin low
+  HAL_Delay(5);
+  GPIOB->BSRR = (1 << 7);         // set clock high
+  HAL_Delay(5);
+  GPIOB->BSRR = (1 << (7 + 16));  // set clock low
+  GPIOC->BSRR = (1 << 13);        // set reset pin high
+  HAL_Delay(5);
+
+  // Load coefficients
+  for(int i = 0; i < N_TAPS; i ++){
+    int8_t temp = fir_coeffs[i];
+    GPIOA->ODR = (GPIOA->ODR & 0xFF00) | (temp & 0xFF);
+
+    HAL_Delay(5);
+    GPIOB->BSRR = (1 << 7);         // set clock high
+
+    HAL_Delay(5);
+    GPIOB->BSRR = (1 << (7 + 16));  // set clock low
+  }
+  GPIOC->BSRR = (1 << (14 + 16));  // MODE = 0 (normal operation)
+  // COEFFICIENT LOADING END
 
   // --- PA12: TIM1_ETR, AF1 ---
   GPIOA->MODER &= ~(3 << (12 * 2));
@@ -189,6 +272,7 @@ int main(void)
   ADC1->CR2 |=  (0b01   << ADC_CR2_EXTEN_Pos);   // rising edge
 
   ADC1->CR2 |= ADC_CR2_ADON;
+  for (volatile int i = 0; i < 1000; i++);
 
   // PA12 is already input via ETR, just add EXTI
   SYSCFG->EXTICR[3] &= ~(0xF << 0);   // EXTI12 → PA
@@ -201,11 +285,14 @@ int main(void)
   NVIC_SetPriority(EXTI15_10_IRQn, 0);
   NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-  for (volatile int i = 0; i < 1000; i++);
-
   // --- TIM4 PWM ---
-  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
-  TIM4->CCR1 = 21000;
+  // Switch PB7 to alternate function mode
+  GPIOB->MODER  &= ~(3 << (7 * 2));
+  GPIOB->MODER  |=  (2 << (7 * 2));   // AF mode
+  GPIOB->AFR[0] &= ~(0xF << (7 * 4));
+  GPIOB->AFR[0] |=  (2   << (7 * 4)); // AF2 = TIM4
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
+  TIM4->CCR2 = 7000;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -317,7 +404,7 @@ static void MX_TIM4_Init(void)
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
