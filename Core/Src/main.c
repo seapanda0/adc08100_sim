@@ -22,11 +22,18 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-// PIN A8 - ADC_CLK = tim1 CCR1
-// PIN A0-A7 - ADC_IN
-// PIN
-// PIN B1 - ANALOG IN
-// PIM B6 - 1khz PWM Clock
+// INPUTS FROM FPGA
+// A12 - ADC_CLK = tim1 ext
+
+// OUTPUTS TO FPGA
+// A0-A7 - ADC_IN
+// C13 - RESET_N
+// C14 - MODE
+// B6 - 1khz PWM Clock (TIM4 CH1 PWM) ps: change to 6khz
+
+// OTHER PINS
+// B1 - ANALOG IN
+
 
 /* USER CODE END Includes */
 
@@ -64,6 +71,22 @@ static void MX_TIM4_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+void EXTI15_10_IRQHandler(void)
+{
+    if (EXTI->PR & (1 << 12))
+    {
+        EXTI->PR = (1 << 12);  // clear flag
+
+        // Wait for ADC conversion to complete
+        while (!(ADC1->SR & ADC_SR_EOC));
+
+        val = ADC1->DR >> 4;
+
+        // Write to PA0-PA7
+        GPIOA->ODR = (GPIOA->ODR & 0xFF00) | (val & 0xFF);
+    }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -99,6 +122,14 @@ int main(void)
   /* USER CODE BEGIN 2 */
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN;
   RCC->APB2ENR |= RCC_APB2ENR_TIM1EN | RCC_APB2ENR_ADC1EN | RCC_APB2ENR_SYSCFGEN;
+
+  // PA0-PA7 as general purpose output
+  GPIOA->MODER   &= ~(0x0000FFFF);  // clear bits 0-15 (PA0-PA7)
+  GPIOA->MODER   |=  (0x00005555);  // 01 for each = output mode
+  GPIOA->OTYPER  &= ~(0x00FF);      // push-pull
+  GPIOA->OSPEEDR &= ~(0x0000FFFF);  // clear
+  GPIOA->OSPEEDR |=  (0x00005555);  // medium speed
+  GPIOA->PUPDR   &= ~(0x0000FFFF);  // no pull
 
   // --- PA12: TIM1_ETR, AF1 ---
   GPIOA->MODER &= ~(3 << (12 * 2));
@@ -158,6 +189,18 @@ int main(void)
   ADC1->CR2 |=  (0b01   << ADC_CR2_EXTEN_Pos);   // rising edge
 
   ADC1->CR2 |= ADC_CR2_ADON;
+
+  // PA12 is already input via ETR, just add EXTI
+  SYSCFG->EXTICR[3] &= ~(0xF << 0);   // EXTI12 → PA
+  SYSCFG->EXTICR[3] |=  (0x0 << 0);
+
+  EXTI->IMR  |=  (1 << 12);   // unmask line 12
+  EXTI->RTSR |=  (1 << 12);   // rising edge
+  EXTI->FTSR &= ~(1 << 12);   // not falling
+
+  NVIC_SetPriority(EXTI15_10_IRQn, 0);
+  NVIC_EnableIRQ(EXTI15_10_IRQn);
+
   for (volatile int i = 0; i < 1000; i++);
 
   // --- TIM4 PWM ---
@@ -174,9 +217,6 @@ int main(void)
 //	    while (!(ADC1->SR & ADC_SR_EOC));  // wait for conversion
 //	    val = ADC1->DR >> 4;
 //	    HAL_Delay(100);
-	  if (ADC1->SR & ADC_SR_EOC) {
-	      val = ADC1->DR >> 4;
-	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
