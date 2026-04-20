@@ -1,2 +1,2 @@
 eclipse.preferences.version=1
-sfrviewstate={"fFavorites"\:{"fLists"\:{}},"fProperties"\:{"fNodeProperties"\:{"STM32F401/ADC1/SR"\:{"fNodeProperties"\:{"autoupdate"\:"false"}},"STM32F401/TIM1/CNT"\:{"fNodeProperties"\:{"autoupdate"\:"true"}}}}}
+sfrviewstate={"fFavorites"\:{"fLists"\:{}},"fProperties"\:{"fNodeProperties"\:{"STM32F401/ADC1/SR"\:{"fNodeProperties"\:{"autoupdate"\:"false"}},"STM32F401/TIM1/CNT"\:{"fNodeProperties"\:{"autoupdate"\:"true"}},"STM32F401/GPIOA/IDR"\:{"fNodeProperties"\:{"autoupdate"\:"true"}}}}}

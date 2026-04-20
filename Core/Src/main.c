@@ -56,6 +56,9 @@ uint16_t val;
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim4;
 
+UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_tx;
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -63,43 +66,44 @@ TIM_HandleTypeDef htim4;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_TIM4_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define N_TAPS  12
+
+#define N_TAPS  8
 #define Q_SCALE 128
 
-#define COEFF_0  0x01  /*    1 -> +0.007812  (float: +0.008260) */
-#define COEFF_1  0x02  /*    2 -> +0.015625  (float: +0.019310) */
-#define COEFF_2  0x07  /*    7 -> +0.054688  (float: +0.051067) */
-#define COEFF_3  0x0D  /*   13 -> +0.101562  (float: +0.098457) */
-#define COEFF_4  0x13  /*   19 -> +0.148438  (float: +0.146382) */
-#define COEFF_5  0x17  /*   23 -> +0.179688  (float: +0.176525) */
-#define COEFF_6  0x17  /*   23 -> +0.179688  (float: +0.176525) */
-#define COEFF_7  0x13  /*   19 -> +0.148438  (float: +0.146382) */
-#define COEFF_8  0x0D  /*   13 -> +0.101562  (float: +0.098457) */
-#define COEFF_9  0x07  /*    7 -> +0.054688  (float: +0.051067) */
-#define COEFF_10  0x02  /*    2 -> +0.015625  (float: +0.019310) */
-#define COEFF_11  0x01  /*    1 -> +0.007812  (float: +0.008260) */
+#define COEFF_0  0x02  /*    2 -> +0.015625  (float: +0.017406) */
+#define COEFF_1  0x08  /*    8 -> +0.062500  (float: +0.061207) */
+#define COEFF_2  0x15  /*   21 -> +0.164062  (float: +0.166164) */
+#define COEFF_3  0x21  /*   33 -> +0.257812  (float: +0.255222) */
+#define COEFF_4  0x21  /*   33 -> +0.257812  (float: +0.255222) */
+#define COEFF_5  0x15  /*   21 -> +0.164062  (float: +0.166164) */
+#define COEFF_6  0x08  /*    8 -> +0.062500  (float: +0.061207) */
+#define COEFF_7  0x02  /*    2 -> +0.015625  (float: +0.017406) */
 
 static const int8_t fir_coeffs[N_TAPS] = {
-    (int8_t)COEFF_0  /*    1 */,
-    (int8_t)COEFF_1  /*    2 */,
-    (int8_t)COEFF_2  /*    7 */,
-    (int8_t)COEFF_3  /*   13 */,
-    (int8_t)COEFF_4  /*   19 */,
-    (int8_t)COEFF_5  /*   23 */,
-    (int8_t)COEFF_6  /*   23 */,
-    (int8_t)COEFF_7  /*   19 */,
-    (int8_t)COEFF_8  /*   13 */,
-    (int8_t)COEFF_9  /*    7 */,
-    (int8_t)COEFF_10  /*    2 */,
-    (int8_t)COEFF_11  /*    1 */
+    (int8_t)COEFF_0  /*    2 */,
+    (int8_t)COEFF_1  /*    8 */,
+    (int8_t)COEFF_2  /*   21 */,
+    (int8_t)COEFF_3  /*   33 */,
+    (int8_t)COEFF_4  /*   33 */,
+    (int8_t)COEFF_5  /*   21 */,
+    (int8_t)COEFF_6  /*    8 */,
+    (int8_t)COEFF_7  /*    2 */
 };
+
+int new_data;
+uint8_t val2;
+uint32_t prev_time;
+uint32_t curr_time;
+uint32_t delta_time;
 
 void EXTI15_10_IRQHandler(void)
 {
@@ -108,12 +112,14 @@ void EXTI15_10_IRQHandler(void)
         EXTI->PR = (1 << 12);  // clear flag
 
         // Wait for ADC conversion to complete
-        while (!(ADC1->SR & ADC_SR_EOC));
+//        while (!(ADC1->SR & ADC_SR_EOC));
 
         val = ADC1->DR >> 4;
 
         // Write to PA0-PA7
         GPIOA->ODR = (GPIOA->ODR & 0xFF00) | (val & 0xFF);
+
+        new_data = 1;
     }
 }
 
@@ -148,7 +154,9 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM4_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN;
@@ -292,13 +300,24 @@ int main(void)
   GPIOB->AFR[0] &= ~(0xF << (7 * 4));
   GPIOB->AFR[0] |=  (2   << (7 * 4)); // AF2 = TIM4
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
-  TIM4->CCR2 = 7000;
+  TIM4->CCR2 = 5250;
+
+//  MX_USART1_UART_Init();
+  HAL_UART_Transmit_DMA(&huart1, &val2, 1);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    // if(new_data){
+      // new_data = 0;
+      // curr_time = HAL_GetTick();
+      // delta_time = curr_time - prev_time;
+      // prev_time = curr_time;
+      val2 = val & 0x00FF;
+    // }
 
 //	    ADC1->CR2 |= ADC_CR2_SWSTART;  // force software trigger
 //	    while (!(ADC1->SR & ADC_SR_EOC));  // wait for conversion
@@ -376,9 +395,9 @@ static void MX_TIM4_Init(void)
 
   /* USER CODE END TIM4_Init 1 */
   htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 1;
+  htim4.Init.Prescaler = 0;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 41999;
+  htim4.Init.Period = 10499;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
@@ -416,6 +435,55 @@ static void MX_TIM4_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 921600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream7_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -429,6 +497,7 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
